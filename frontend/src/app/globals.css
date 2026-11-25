@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+:root {
+  --abyss-teal: #0f3d3e;
+  --abyss-teal-dark: #0a2b2c;
+  --abyss-teal-light: #165254;
+  --sand-putty: #f4f1ea;
+  --sand-putty-dark: #e6e0d4;
+  --sand-border: #d5cdbd;
+  --taxi-volt: #ffd400;
+  --taxi-volt-hover: #e6bf00;
+}
+
+body {
+  background-color: var(--sand-putty);
+  color: #132425;
+  font-family: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
