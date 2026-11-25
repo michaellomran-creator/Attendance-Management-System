@@ -271,3 +271,31 @@ def test_cross_tenant_fk_injection_and_subscription_suspension(
         headers={"Authorization": f"Bearer {token_a}"},
     )
     assert blocked.status_code == 403
+
+
+def test_cors_allows_production_vercel_origin_and_blocks_untrusted(
+    client: TestClient,
+) -> None:
+    allowed = client.options(
+        "/api/v1/auth/login",
+        headers={
+            "Origin": "https://staff-attendance-brown.vercel.app",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert allowed.status_code == 200
+    assert (
+        allowed.headers.get("access-control-allow-origin")
+        == "https://staff-attendance-brown.vercel.app"
+    )
+
+    disallowed = client.options(
+        "/api/v1/auth/login",
+        headers={
+            "Origin": "https://evil-untrusted-origin.example.com",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert disallowed.status_code == 400
+    assert disallowed.headers.get("access-control-allow-origin") is None

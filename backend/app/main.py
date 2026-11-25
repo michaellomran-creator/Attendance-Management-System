@@ -20,8 +20,6 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
     allow_origin_regex=settings.BACKEND_CORS_ORIGIN_REGEX,
-    allow_private_network=settings.CORS_ALLOW_PRIVATE_NETWORK
-    or settings.APP_ENV == "development",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

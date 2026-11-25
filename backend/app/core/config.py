@@ -31,7 +31,6 @@ class Settings(BaseSettings):
         "http://localhost:3000,http://localhost:3001,https://staff-attendance-brown.vercel.app"
     )
     BACKEND_CORS_ORIGIN_REGEX: Optional[str] = r"^https://.*\.vercel\.app$"
-    CORS_ALLOW_PRIVATE_NETWORK: bool = False
 
     SEED_DEMO_DATA: bool = False
     PLATFORM_ADMIN_EMAIL: str = "platform-admin@noramdigital.com"
