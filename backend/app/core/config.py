@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,7 +27,11 @@ class Settings(BaseSettings):
     PIN_LOCKOUT_MINUTES: int = 15
     LOGIN_RATE_LIMIT_PER_MINUTE: int = 10
 
-    BACKEND_CORS_ORIGINS: str = "http://localhost:3000"
+    BACKEND_CORS_ORIGINS: str = (
+        "http://localhost:3000,http://localhost:3001,https://staff-attendance-brown.vercel.app"
+    )
+    BACKEND_CORS_ORIGIN_REGEX: Optional[str] = r"^https://.*\.vercel\.app$"
+    CORS_ALLOW_PRIVATE_NETWORK: bool = False
 
     SEED_DEMO_DATA: bool = False
     PLATFORM_ADMIN_EMAIL: str = "platform-admin@noramdigital.com"
