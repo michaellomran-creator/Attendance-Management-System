@@ -4,14 +4,13 @@ import io
 from typing import List, Optional
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
+from app.core.exceptions import ConflictError, NotFoundError
 from app.core.security import hash_secret
 from app.models.employee import Employee, EmployeeCredential
 from app.models.organization import Department, Location, Position
-from app.models.platform import Subscription, SubscriptionPlan
 from app.models.user import User, UserRole
 from app.schemas.employee import (
     BulkImportPreviewResponse,
@@ -22,33 +21,6 @@ from app.schemas.employee import (
 )
 from app.services.audit_service import record_audit_log
 from app.services.rbac_service import get_org_role_by_code
-
-
-def _check_employee_plan_limit(db: Session, organization_id: uuid.UUID) -> None:
-    sub = (
-        db.execute(
-            select(Subscription)
-            .where(Subscription.organization_id == organization_id)
-            .order_by(Subscription.created_at.desc())
-        )
-        .scalars()
-        .first()
-    )
-    if not sub:
-        return
-    plan = db.get(SubscriptionPlan, sub.plan_id)
-    if not plan:
-        return
-    active_count = db.execute(
-        select(func.count(Employee.id)).where(
-            Employee.organization_id == organization_id,
-            Employee.employment_status == "active",
-        )
-    ).scalar_one()
-    if active_count >= plan.max_employees:
-        raise ForbiddenError(
-            f"Subscription plan '{plan.name}' limit of {plan.max_employees} active employees has been reached."
-        )
 
 
 def serialize_employee(db: Session, emp: Employee) -> EmployeeOut:
@@ -118,8 +90,6 @@ def create_employee(
     actor_user_id: uuid.UUID,
     actor_email: str,
 ) -> EmployeeOut:
-    _check_employee_plan_limit(db, organization_id)
-
     existing_code = (
         db.execute(
             select(Employee).where(

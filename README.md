@@ -102,7 +102,7 @@ pg_restore -U attendance_user -h localhost -d attendance_platform --clean --if-e
 ### Organization Onboarding (Platform Owner)
 1. Sign in at `/login` as the Platform Owner.
 2. Open **Platform Console** (`/platform`) and click **Onboard Organization**.
-3. Enter organization details, time zone (e.g., `Africa/Addis_Ababa`), subscription plan, and initial Organization Administrator credentials.
+3. Enter organization details, time zone (e.g., `Africa/Addis_Ababa`), and initial Organization Administrator credentials.
 
 ### Administrator Guide
 1. Sign in at `/login` with your Organization Administrator account.

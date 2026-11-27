@@ -1,9 +1,11 @@
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.platform import SubscriptionPlan
+from app.models.organization import Organization
+from app.models.platform import AuditLog
+from app.models.user import Permission, User
 
 
 def _login(client: TestClient, email: str, password: str) -> str:
@@ -18,9 +20,6 @@ def _onboard_two_orgs(client: TestClient, db: Session) -> tuple[dict, dict, str,
     platform_token = _login(
         client, settings.PLATFORM_ADMIN_EMAIL, settings.PLATFORM_ADMIN_PASSWORD
     )
-    plan = db.execute(
-        select(SubscriptionPlan).where(SubscriptionPlan.code == "starter")
-    ).scalar_one()
 
     org_a_res = client.post(
         "/api/v1/platform/organizations",
@@ -33,7 +32,6 @@ def _onboard_two_orgs(client: TestClient, db: Session) -> tuple[dict, dict, str,
             "phone_number": "+251911111111",
             "country": "Ethiopia",
             "timezone": "Africa/Addis_Ababa",
-            "plan_id": str(plan.id),
             "admin_full_name": "Alpha Admin",
             "admin_email": "admin@alpha.example.com",
             "admin_password": "AlphaPassword!2026",
@@ -52,7 +50,6 @@ def _onboard_two_orgs(client: TestClient, db: Session) -> tuple[dict, dict, str,
             "phone_number": "+251922222222",
             "country": "Ethiopia",
             "timezone": "Africa/Addis_Ababa",
-            "plan_id": str(plan.id),
             "admin_full_name": "Beta Admin",
             "admin_email": "admin@beta.example.com",
             "admin_password": "BetaPassword!2026",
@@ -65,12 +62,24 @@ def _onboard_two_orgs(client: TestClient, db: Session) -> tuple[dict, dict, str,
     return org_a_res.json(), org_b_res.json(), token_a, token_b
 
 
+def test_seed_initial_platform_without_plans_or_demo_data(db: Session) -> None:
+    # conftest runs seed_initial_platform(session)
+    perm_count = db.execute(select(func.count(Permission.id))).scalar_one()
+    org_count = db.execute(select(func.count(Organization.id))).scalar_one()
+    admin = db.execute(
+        select(User).where(User.email == settings.PLATFORM_ADMIN_EMAIL.lower())
+    ).scalar_one_or_none()
+    assert perm_count > 0
+    assert org_count == 0
+    assert admin is not None and admin.is_platform_admin is True
+
+
 def test_tenant_isolation_employees_attendance_and_reports(
     client: TestClient, db: Session
 ) -> None:
     _, _, token_a, token_b = _onboard_two_orgs(client, db)
 
-    # Org A registers an employee
+    # Org A registers an employee (no subscription limits)
     emp_a_res = client.post(
         "/api/v1/employees",
         headers={"Authorization": f"Bearer {token_a}"},
@@ -208,7 +217,7 @@ def test_department_manager_scoping(client: TestClient, db: Session) -> None:
     assert forbidden_res.status_code == 403
 
 
-def test_cross_tenant_fk_injection_and_subscription_suspension(
+def test_cross_tenant_fk_injection_and_manual_org_lifecycle(
     client: TestClient, db: Session
 ) -> None:
     org_a, _, token_a, token_b = _onboard_two_orgs(client, db)
@@ -258,19 +267,92 @@ def test_cross_tenant_fk_injection_and_subscription_suspension(
     )
     assert bad_user.status_code == 404
 
-    # Suspending Org A's subscription blocks Org A API access
-    sub_res = client.patch(
-        f"/api/v1/platform/organizations/{org_a['id']}/subscription",
-        headers={"Authorization": f"Bearer {platform_token}"},
-        json={"status": "suspended"},
-    )
-    assert sub_res.status_code == 200
-
-    blocked = client.get(
-        "/api/v1/employees",
+    # Register terminal for Org A before suspension
+    term_res = client.post(
+        "/api/v1/terminals",
         headers={"Authorization": f"Bearer {token_a}"},
+        json={"name": "Front Terminal", "device_identifier": "ALPHA-TERM-09"},
     )
-    assert blocked.status_code == 403
+    assert term_res.status_code == 201
+    term_token = term_res.json()["terminal_token"]
+
+    # Manual suspension by Platform Admin blocks user API, login, and terminal auth
+    suspend_res = client.patch(
+        f"/api/v1/platform/organizations/{org_a['id']}/status",
+        headers={"Authorization": f"Bearer {platform_token}"},
+        json={"status": "suspended", "reason": "Manual agreement hold"},
+    )
+    assert suspend_res.status_code == 200
+    assert suspend_res.json()["status"] == "suspended"
+
+    assert (
+        client.get(
+            "/api/v1/employees", headers={"Authorization": f"Bearer {token_a}"}
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@alpha.example.com", "password": "AlphaPassword!2026"},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            "/api/v1/terminals/kiosk/info", headers={"X-Terminal-Token": term_token}
+        ).status_code
+        == 403
+    )
+
+    # Manual deactivation also blocks access
+    deactivate_res = client.patch(
+        f"/api/v1/platform/organizations/{org_a['id']}/status",
+        headers={"Authorization": f"Bearer {platform_token}"},
+        json={"status": "inactive", "reason": "Contract ended"},
+    )
+    assert deactivate_res.status_code == 200
+    assert deactivate_res.json()["status"] == "inactive"
+    assert (
+        client.get(
+            "/api/v1/employees", headers={"Authorization": f"Bearer {token_a}"}
+        ).status_code
+        == 403
+    )
+
+    # Manual reactivation restores user & terminal access
+    activate_res = client.patch(
+        f"/api/v1/platform/organizations/{org_a['id']}/status",
+        headers={"Authorization": f"Bearer {platform_token}"},
+        json={"status": "active", "reason": "Agreement renewed"},
+    )
+    assert activate_res.status_code == 200
+    assert activate_res.json()["status"] == "active"
+    assert (
+        client.get(
+            "/api/v1/employees", headers={"Authorization": f"Bearer {token_a}"}
+        ).status_code
+        == 200
+    )
+    assert (
+        client.get(
+            "/api/v1/terminals/kiosk/info", headers={"X-Terminal-Token": term_token}
+        ).status_code
+        == 200
+    )
+
+    # Verify status changes are recorded in audit_logs
+    status_audits = (
+        db.execute(
+            select(AuditLog).where(
+                AuditLog.action == "platform.organization_status_updated",
+                AuditLog.entity_id == org_a["id"],
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(status_audits) == 3
 
 
 def test_cors_allows_production_vercel_origin_and_blocks_untrusted(

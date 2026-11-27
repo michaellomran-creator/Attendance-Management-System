@@ -17,8 +17,6 @@ from app.models.organization import (
 from app.models.platform import (
     AuditLog,
     PlatformSettings,
-    Subscription,
-    SubscriptionPlan,
 )
 from app.models.requests import (
     AttendanceCorrectionRequest,
@@ -39,8 +37,6 @@ from app.models.user import (
 __all__ = [
     "Base",
     "PlatformSettings",
-    "SubscriptionPlan",
-    "Subscription",
     "AuditLog",
     "Organization",
     "OrganizationSettings",

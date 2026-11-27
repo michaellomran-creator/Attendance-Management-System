@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 import re
 from typing import Optional
 import uuid
@@ -6,20 +6,18 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import ConflictError
 from app.core.security import hash_secret
 from app.models.attendance import AttendanceSession
 from app.models.employee import Employee
 from app.models.organization import Organization, OrganizationSettings
-from app.models.platform import PlatformSettings, Subscription, SubscriptionPlan
+from app.models.platform import PlatformSettings
 from app.models.requests import LeaveType
 from app.models.user import User, UserRole
 from app.schemas.platform import (
     OrganizationOnboardRequest,
     OrganizationOut,
     PlatformAnalyticsOut,
-    SubscriptionOut,
-    SubscriptionPlanCreate,
 )
 from app.services.audit_service import record_audit_log
 from app.services.rbac_service import initialize_organization_roles
@@ -38,10 +36,6 @@ def onboard_organization(
     actor_email: str,
     ip_address: Optional[str] = None,
 ) -> OrganizationOut:
-    plan = db.get(SubscriptionPlan, payload.plan_id)
-    if not plan or not plan.is_active:
-        raise NotFoundError("Selected subscription plan does not exist or is inactive")
-
     existing_user = (
         db.execute(
             select(User).where(User.email == payload.admin_email.lower().strip())
@@ -97,20 +91,6 @@ def onboard_organization(
     db.flush()
     db.add(UserRole(user_id=admin_user.id, role_id=roles["org_admin"].id))
 
-    today = date.today()
-    days = 365 if payload.billing_cycle == "annual" else 30
-    subscription = Subscription(
-        organization_id=org.id,
-        plan_id=plan.id,
-        status="active",
-        billing_cycle=payload.billing_cycle,
-        payment_status="paid",
-        start_date=today,
-        expiry_date=today + timedelta(days=days),
-        grace_period_days=14,
-    )
-    db.add(subscription)
-
     # Seed default leave types for the new organization
     default_leave_types = [
         ("Annual Leave", "ANNUAL", True, 20),
@@ -140,13 +120,11 @@ def onboard_organization(
         ip_address=ip_address,
         metadata={
             "organization_name": org.name,
-            "plan_code": plan.code,
             "admin_email": admin_user.email,
         },
     )
     db.commit()
     db.refresh(org)
-    db.refresh(subscription)
 
     return OrganizationOut(
         id=org.id,
@@ -163,60 +141,7 @@ def onboard_organization(
         status=org.status,
         created_at=org.created_at,
         active_employees_count=0,
-        subscription=SubscriptionOut(
-            id=subscription.id,
-            organization_id=subscription.organization_id,
-            plan_id=subscription.plan_id,
-            plan_name=plan.name,
-            status=subscription.status,
-            billing_cycle=subscription.billing_cycle,
-            payment_status=subscription.payment_status,
-            start_date=subscription.start_date,
-            expiry_date=subscription.expiry_date,
-            grace_period_days=subscription.grace_period_days,
-            notes=subscription.notes,
-        ),
     )
-
-
-def create_subscription_plan(
-    db: Session, payload: SubscriptionPlanCreate, actor_user_id: uuid.UUID, actor_email: str
-) -> SubscriptionPlan:
-    existing = (
-        db.execute(
-            select(SubscriptionPlan).where(SubscriptionPlan.code == payload.code.lower())
-        )
-        .scalars()
-        .first()
-    )
-    if existing:
-        raise ConflictError("Subscription plan code already exists")
-
-    plan = SubscriptionPlan(
-        code=payload.code.lower().strip(),
-        name=payload.name.strip(),
-        description=payload.description,
-        max_employees=payload.max_employees,
-        max_locations=payload.max_locations,
-        max_admins=payload.max_admins,
-        data_retention_days=payload.data_retention_days,
-        monthly_price=payload.monthly_price,
-        currency=payload.currency,
-        support_level=payload.support_level,
-        features=payload.features,
-    )
-    db.add(plan)
-    record_audit_log(
-        db,
-        action="platform.plan_created",
-        entity_type="subscription_plan",
-        entity_id=plan.code,
-        actor_user_id=actor_user_id,
-        actor_email=actor_email,
-    )
-    db.commit()
-    db.refresh(plan)
-    return plan
 
 
 def get_platform_analytics(db: Session) -> PlatformAnalyticsOut:
@@ -238,11 +163,6 @@ def get_platform_analytics(db: Session) -> PlatformAnalyticsOut:
         )
     ).scalar_one()
 
-    sub_rows = db.execute(
-        select(Subscription.status, func.count(Subscription.id)).group_by(
-            Subscription.status
-        )
-    ).all()
     type_rows = db.execute(
         select(Organization.organization_type, func.count(Organization.id)).group_by(
             Organization.organization_type
@@ -255,7 +175,6 @@ def get_platform_analytics(db: Session) -> PlatformAnalyticsOut:
         suspended_organizations=suspended_orgs,
         total_active_employees=total_active_employees,
         total_attendance_sessions_today=sessions_today,
-        subscriptions_by_status={row[0]: row[1] for row in sub_rows},
         organizations_by_type={row[0]: row[1] for row in type_rows},
     )
 

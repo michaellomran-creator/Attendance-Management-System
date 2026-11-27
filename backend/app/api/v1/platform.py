@@ -14,7 +14,7 @@ from app.core.dependencies import (
 from app.core.exceptions import NotFoundError
 from app.models.employee import Employee
 from app.models.organization import Organization
-from app.models.platform import AuditLog, Subscription, SubscriptionPlan
+from app.models.platform import AuditLog
 from app.schemas.platform import (
     AuditLogOut,
     OrganizationOnboardRequest,
@@ -23,14 +23,9 @@ from app.schemas.platform import (
     PlatformAnalyticsOut,
     PlatformSettingsOut,
     PlatformSettingsUpdate,
-    SubscriptionOut,
-    SubscriptionPlanCreate,
-    SubscriptionPlanOut,
-    SubscriptionUpdate,
 )
 from app.services.audit_service import record_audit_log
 from app.services.platform_service import (
-    create_subscription_plan,
     get_or_create_platform_settings,
     get_platform_analytics,
     onboard_organization,
@@ -45,31 +40,6 @@ def platform_analytics(
     db: Session = Depends(get_db),
 ) -> PlatformAnalyticsOut:
     return get_platform_analytics(db)
-
-
-@router.get("/plans", response_model=List[SubscriptionPlanOut])
-def list_plans(
-    _: AuthContext = Depends(require_platform_admin),
-    db: Session = Depends(get_db),
-) -> List[SubscriptionPlanOut]:
-    plans = db.execute(
-        select(SubscriptionPlan).order_by(SubscriptionPlan.monthly_price)
-    ).scalars().all()
-    return [SubscriptionPlanOut.model_validate(p) for p in plans]
-
-
-@router.post(
-    "/plans",
-    response_model=SubscriptionPlanOut,
-    status_code=status.HTTP_201_CREATED,
-)
-def create_plan(
-    payload: SubscriptionPlanCreate,
-    auth: AuthContext = Depends(require_platform_admin),
-    db: Session = Depends(get_db),
-) -> SubscriptionPlanOut:
-    plan = create_subscription_plan(db, payload, auth.user.id, auth.user.email)
-    return SubscriptionPlanOut.model_validate(plan)
 
 
 @router.get("/organizations", response_model=List[OrganizationOut])
@@ -97,16 +67,6 @@ def list_organizations(
                 Employee.employment_status == "active",
             )
         ).scalar_one()
-        sub = (
-            db.execute(
-                select(Subscription)
-                .where(Subscription.organization_id == org.id)
-                .order_by(Subscription.created_at.desc())
-            )
-            .scalars()
-            .first()
-        )
-        plan = db.get(SubscriptionPlan, sub.plan_id) if sub else None
         results.append(
             OrganizationOut(
                 id=org.id,
@@ -123,21 +83,6 @@ def list_organizations(
                 status=org.status,
                 created_at=org.created_at,
                 active_employees_count=active_emp,
-                subscription=SubscriptionOut(
-                    id=sub.id,
-                    organization_id=sub.organization_id,
-                    plan_id=sub.plan_id,
-                    plan_name=plan.name if plan else None,
-                    status=sub.status,
-                    billing_cycle=sub.billing_cycle,
-                    payment_status=sub.payment_status,
-                    start_date=sub.start_date,
-                    expiry_date=sub.expiry_date,
-                    grace_period_days=sub.grace_period_days,
-                    notes=sub.notes,
-                )
-                if sub
-                else None,
             )
         )
     return results
@@ -190,6 +135,13 @@ def update_organization_status(
     db.commit()
     db.refresh(org)
 
+    active_emp = db.execute(
+        select(func.count(Employee.id)).where(
+            Employee.organization_id == org.id,
+            Employee.employment_status == "active",
+        )
+    ).scalar_one()
+
     return OrganizationOut(
         id=org.id,
         name=org.name,
@@ -204,56 +156,7 @@ def update_organization_status(
         estimated_employees=org.estimated_employees,
         status=org.status,
         created_at=org.created_at,
-    )
-
-
-@router.patch("/organizations/{organization_id}/subscription", response_model=SubscriptionOut)
-def update_organization_subscription(
-    organization_id: uuid.UUID,
-    payload: SubscriptionUpdate,
-    auth: AuthContext = Depends(require_platform_admin),
-    db: Session = Depends(get_db),
-) -> SubscriptionOut:
-    sub = (
-        db.execute(
-            select(Subscription)
-            .where(Subscription.organization_id == organization_id)
-            .order_by(Subscription.created_at.desc())
-        )
-        .scalars()
-        .first()
-    )
-    if not sub:
-        raise NotFoundError("Subscription not found for this organization")
-
-    for field, val in payload.model_dump(exclude_unset=True).items():
-        setattr(sub, field, val)
-
-    record_audit_log(
-        db,
-        action="platform.subscription_updated",
-        entity_type="subscription",
-        entity_id=str(sub.id),
-        organization_id=organization_id,
-        actor_user_id=auth.user.id,
-        actor_email=auth.user.email,
-        metadata=payload.model_dump(exclude_unset=True, mode="json"),
-    )
-    db.commit()
-    db.refresh(sub)
-    plan = db.get(SubscriptionPlan, sub.plan_id)
-    return SubscriptionOut(
-        id=sub.id,
-        organization_id=sub.organization_id,
-        plan_id=sub.plan_id,
-        plan_name=plan.name if plan else None,
-        status=sub.status,
-        billing_cycle=sub.billing_cycle,
-        payment_status=sub.payment_status,
-        start_date=sub.start_date,
-        expiry_date=sub.expiry_date,
-        grace_period_days=sub.grace_period_days,
-        notes=sub.notes,
+        active_employees_count=active_emp,
     )
 
 

@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional, Set
 import uuid
 
@@ -13,7 +12,6 @@ from app.core.exceptions import ForbiddenError, UnauthorizedError
 from app.core.security import decode_token, hash_token
 from app.models.attendance import AttendanceTerminal
 from app.models.organization import Organization
-from app.models.platform import Subscription
 from app.models.user import Role, RolePermission, User, UserRole
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -29,27 +27,10 @@ class AuthContext:
     assigned_department_ids: Set[uuid.UUID]
 
 
-def _ensure_org_and_subscription_active(db: Session, organization_id: uuid.UUID) -> None:
+def _ensure_org_active(db: Session, organization_id: uuid.UUID) -> None:
     org = db.get(Organization, organization_id)
     if not org or org.status != "active":
         raise ForbiddenError("Organization account is suspended or inactive")
-
-    sub = (
-        db.execute(
-            select(Subscription)
-            .where(Subscription.organization_id == organization_id)
-            .order_by(Subscription.created_at.desc())
-        )
-        .scalars()
-        .first()
-    )
-    if sub:
-        if sub.status in {"suspended", "cancelled"}:
-            raise ForbiddenError("Organization subscription is suspended or cancelled")
-        today = datetime.now(timezone.utc).date()
-        grace_deadline = sub.expiry_date + timedelta(days=sub.grace_period_days)
-        if sub.status == "expired" and today > grace_deadline:
-            raise ForbiddenError("Organization subscription has expired beyond grace period")
 
 
 def get_current_auth(
@@ -85,9 +66,9 @@ def get_current_auth(
     if not user or not user.is_active:
         raise UnauthorizedError("User account is inactive or does not exist")
 
-    # Verify organization and subscription are active for non-platform users
+    # Verify organization is active for non-platform users
     if user.organization_id is not None:
-        _ensure_org_and_subscription_active(db, user.organization_id)
+        _ensure_org_active(db, user.organization_id)
 
     role_codes: Set[str] = set()
     permission_codes: Set[str] = set()
@@ -169,7 +150,7 @@ def get_authenticated_terminal(
     if not terminal or not terminal.is_active:
         raise UnauthorizedError("Terminal is unauthorized or deactivated")
 
-    _ensure_org_and_subscription_active(db, terminal.organization_id)
+    _ensure_org_active(db, terminal.organization_id)
 
     return terminal
 

@@ -5,10 +5,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.security import hash_secret
-from app.models.attendance import AttendanceTerminal
 from app.models.employee import Employee, EmployeeCredential
-from app.models.organization import Department, Location, Position
-from app.models.platform import SubscriptionPlan
+from app.models.organization import Department, Location, Organization
 from app.models.shift import Shift, ShiftAssignment
 from app.models.user import User, UserRole
 from app.schemas.platform import OrganizationOnboardRequest
@@ -20,7 +18,7 @@ from app.services.rbac_service import ensure_platform_roles
 
 
 def seed_initial_platform(db: Session) -> User:
-    """Seed platform owner role, default plans, and platform settings."""
+    """Seed platform permissions, platform owner role, platform settings, and owner account."""
     platform_role = ensure_platform_roles(db)
     get_or_create_platform_settings(db)
 
@@ -44,29 +42,6 @@ def seed_initial_platform(db: Session) -> User:
         db.flush()
         db.add(UserRole(user_id=admin.id, role_id=platform_role.id))
 
-    default_plans = [
-        ("starter", "Starter", 25, 1, 2, 1500),
-        ("business", "Business", 150, 5, 10, 4500),
-        ("enterprise", "Enterprise", 1000, 25, 50, 12000),
-    ]
-    for code, name, max_emp, max_loc, max_adm, price in default_plans:
-        existing_plan = (
-            db.execute(select(SubscriptionPlan).where(SubscriptionPlan.code == code))
-            .scalars()
-            .first()
-        )
-        if not existing_plan:
-            db.add(
-                SubscriptionPlan(
-                    code=code,
-                    name=name,
-                    max_employees=max_emp,
-                    max_locations=max_loc,
-                    max_admins=max_adm,
-                    monthly_price=price,
-                    currency="ETB",
-                )
-            )
     db.commit()
     db.refresh(admin)
     return admin
@@ -75,18 +50,8 @@ def seed_initial_platform(db: Session) -> User:
 def seed_demonstration_data(db: Session, platform_admin: User) -> None:
     """
     DEVELOPMENT DEMONSTRATION DATA ONLY.
-    Populates two sample organizations (Hotel & Hospital) to demonstrate multi-tenancy.
+    Populates a sample organization (Hotel) to demonstrate multi-tenancy.
     """
-    starter = (
-        db.execute(select(SubscriptionPlan).where(SubscriptionPlan.code == "business"))
-        .scalars()
-        .first()
-    )
-    if not starter:
-        return
-
-    from app.models.organization import Organization
-
     existing = (
         db.execute(
             select(Organization).where(
@@ -111,8 +76,6 @@ def seed_demonstration_data(db: Session, platform_admin: User) -> None:
             timezone="Africa/Addis_Ababa",
             address="Bole Sub-City, Addis Ababa",
             estimated_employees=35,
-            plan_id=starter.id,
-            billing_cycle="monthly",
             admin_full_name="Dawit Tadesse (Demo Admin)",
             admin_email="hotel-admin@noramdigital.com",
             admin_password="DemoHotelAdmin!2026",

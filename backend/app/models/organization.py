@@ -41,9 +41,6 @@ class Organization(UUIDMixin, TimestampMixin, Base):
     settings: Mapped[Optional["OrganizationSettings"]] = relationship(
         back_populates="organization", uselist=False, cascade="all, delete-orphan"
     )
-    subscriptions: Mapped[list["Subscription"]] = relationship(
-        back_populates="organization", cascade="all, delete-orphan"
-    )
     departments: Mapped[list["Department"]] = relationship(
         back_populates="organization", cascade="all, delete-orphan"
     )

@@ -6,15 +6,6 @@ import { AppShell } from "@/components/ui/AppShell";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { ApiError, apiFetch } from "@/lib/api";
 
-interface Plan {
-  id: string;
-  code: string;
-  name: string;
-  max_employees: number;
-  monthly_price: number;
-  currency: string;
-}
-
 interface Org {
   id: string;
   name: string;
@@ -24,12 +15,6 @@ interface Org {
   timezone: string;
   status: string;
   active_employees_count: number;
-  subscription: {
-    plan_name: string | null;
-    status: string;
-    payment_status: string;
-    expiry_date: string;
-  } | null;
 }
 
 interface Analytics {
@@ -43,7 +28,6 @@ interface Analytics {
 export default function PlatformAdminPage() {
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
   const [orgs, setOrgs] = useState<Org[]>([]);
-  const [plans, setPlans] = useState<Plan[]>([]);
   const [showOnboard, setShowOnboard] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,7 +39,6 @@ export default function PlatformAdminPage() {
     phone_number: "",
     country: "Ethiopia",
     timezone: "Africa/Addis_Ababa",
-    plan_id: "",
     admin_full_name: "",
     admin_email: "",
     admin_password: "",
@@ -63,21 +46,16 @@ export default function PlatformAdminPage() {
 
   const loadAll = useCallback(async () => {
     try {
-      const [a, o, p] = await Promise.all([
+      const [a, o] = await Promise.all([
         apiFetch<Analytics>("/platform/analytics"),
         apiFetch<Org[]>("/platform/organizations"),
-        apiFetch<Plan[]>("/platform/plans"),
       ]);
       setAnalytics(a);
       setOrgs(o);
-      setPlans(p);
-      if (p.length > 0 && !form.plan_id) {
-        setForm((prev) => ({ ...prev, plan_id: p[0].id }));
-      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to load platform data");
     }
-  }, [form.plan_id]);
+  }, []);
 
   useEffect(() => {
     loadAll();
@@ -92,25 +70,44 @@ export default function PlatformAdminPage() {
         body: JSON.stringify(form),
       });
       setShowOnboard(false);
+      setForm({
+        name: "",
+        organization_type: "hotel",
+        contact_person: "",
+        business_email: "",
+        phone_number: "",
+        country: "Ethiopia",
+        timezone: "Africa/Addis_Ababa",
+        admin_full_name: "",
+        admin_email: "",
+        admin_password: "",
+      });
       await loadAll();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Onboarding failed");
     }
   };
 
-  const handleToggleOrgStatus = async (org: Org) => {
-    const nextStatus = org.status === "active" ? "suspended" : "active";
-    await apiFetch(`/platform/organizations/${org.id}/status`, {
-      method: "PATCH",
-      body: JSON.stringify({ status: nextStatus }),
-    });
-    await loadAll();
+  const handleSetOrgStatus = async (
+    org: Org,
+    nextStatus: "active" | "suspended" | "inactive"
+  ) => {
+    setError(null);
+    try {
+      await apiFetch(`/platform/organizations/${org.id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: nextStatus }),
+      });
+      await loadAll();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to update organization status");
+    }
   };
 
   return (
     <AppShell
       title="Platform Owner Console"
-      subtitle="Manage multi-organization tenants, subscriptions, and platform health"
+      subtitle="Manage multi-organization tenants, access status, and platform health"
     >
       {error && (
         <div className="mb-4 p-3 rounded bg-red-50 border border-red-200 text-xs text-red-800">
@@ -187,18 +184,13 @@ export default function PlatformAdminPage() {
               <option value="construction">Construction</option>
               <option value="ngo">NGO / Institution</option>
             </select>
-            <select
+            <input
               required
-              value={form.plan_id}
-              onChange={(e) => setForm({ ...form, plan_id: e.target.value })}
+              placeholder="Time Zone (e.g. Africa/Addis_Ababa)"
+              value={form.timezone}
+              onChange={(e) => setForm({ ...form, timezone: e.target.value })}
               className="px-3 py-2 text-sm rounded border border-[#D5CDBD]"
-            >
-              {plans.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} (up to {p.max_employees} staff)
-                </option>
-              ))}
-            </select>
+            />
             <input
               required
               placeholder="Contact Person"
@@ -261,7 +253,7 @@ export default function PlatformAdminPage() {
             <tr>
               <th className="text-left px-5 py-3">Organization</th>
               <th className="text-left px-5 py-3">Type</th>
-              <th className="text-left px-5 py-3">Plan</th>
+              <th className="text-left px-5 py-3">Time Zone</th>
               <th className="text-left px-5 py-3">Employees</th>
               <th className="text-left px-5 py-3">Status</th>
               <th className="text-right px-5 py-3">Action</th>
@@ -275,18 +267,38 @@ export default function PlatformAdminPage() {
                   <div className="text-xs text-[#546A6B]">{o.business_email}</div>
                 </td>
                 <td className="px-5 py-3 capitalize">{o.organization_type}</td>
-                <td className="px-5 py-3">{o.subscription?.plan_name || "—"}</td>
+                <td className="px-5 py-3 text-xs text-[#546A6B]">{o.timezone}</td>
                 <td className="px-5 py-3">{o.active_employees_count}</td>
                 <td className="px-5 py-3">
                   <StatusBadge status={o.status} />
                 </td>
                 <td className="px-5 py-3 text-right">
-                  <button
-                    onClick={() => handleToggleOrgStatus(o)}
-                    className="px-3 py-1 rounded border border-[#C9C0B1] text-xs font-medium hover:bg-[#F4F1EA]"
-                  >
-                    {o.status === "active" ? "Suspend" : "Activate"}
-                  </button>
+                  <div className="inline-flex gap-2">
+                    {o.status !== "active" && (
+                      <button
+                        onClick={() => handleSetOrgStatus(o, "active")}
+                        className="px-3 py-1 rounded border border-[#C9C0B1] text-xs font-medium hover:bg-[#F4F1EA]"
+                      >
+                        Activate
+                      </button>
+                    )}
+                    {o.status === "active" && (
+                      <button
+                        onClick={() => handleSetOrgStatus(o, "suspended")}
+                        className="px-3 py-1 rounded border border-[#C9C0B1] text-xs font-medium hover:bg-[#F4F1EA]"
+                      >
+                        Suspend
+                      </button>
+                    )}
+                    {o.status !== "inactive" && (
+                      <button
+                        onClick={() => handleSetOrgStatus(o, "inactive")}
+                        className="px-3 py-1 rounded border border-[#C9C0B1] text-xs font-medium hover:bg-[#F4F1EA]"
+                      >
+                        Deactivate
+                      </button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}

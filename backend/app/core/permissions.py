@@ -3,8 +3,6 @@ from typing import Dict, List
 ALL_PERMISSIONS: List[tuple[str, str, str]] = [
     # Platform
     ("platform:manage_orgs", "Manage Organizations", "platform"),
-    ("platform:manage_plans", "Manage Subscription Plans", "platform"),
-    ("platform:manage_subscriptions", "Manage Subscriptions", "platform"),
     ("platform:view_analytics", "View Platform Analytics", "platform"),
     ("platform:manage_settings", "Manage Platform Settings", "platform"),
     ("platform:view_audit", "View Platform Audit Logs", "platform"),
