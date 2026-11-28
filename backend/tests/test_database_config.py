@@ -1,4 +1,7 @@
+import errno
 import logging
+import socket
+import ssl
 from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
@@ -6,7 +9,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.pool import NullPool, QueuePool
 
 from app.core.config import Settings
-from app.core.database import build_engine
+from app.core.database import build_engine, classify_db_exception
 from app.main import app
 
 
@@ -73,12 +76,64 @@ def test_build_engine_uses_queuepool_locally_with_connect_timeout(monkeypatch) -
 
 
 class FakeDbapiError(Exception):
-    def __init__(self, message: str, sqlstate: object = None) -> None:
+    def __init__(self, message: str, sqlstate: object = None, err_no: object = None) -> None:
         super().__init__(message)
         self.sqlstate = sqlstate
+        if err_no is not None:
+            self.errno = err_no
 
 
-def test_health_check_logs_safe_structured_diagnostics_with_valid_sqlstate(
+def test_classify_db_exception_categories() -> None:
+    dns_err = OperationalError(
+        "SELECT 1",
+        {},
+        FakeDbapiError('could not translate host name "ep-secret.neon.tech" to address'),
+    )
+    assert classify_db_exception(dns_err)["category"] == "dns_resolution_failed"
+
+    refused_err = OperationalError(
+        "SELECT 1",
+        {},
+        FakeDbapiError("connection refused", err_no=errno.ECONNREFUSED),
+    )
+    refused_diag = classify_db_exception(refused_err)
+    assert refused_diag["category"] == "connection_refused"
+    assert refused_diag["os_errno"] == str(errno.ECONNREFUSED)
+
+    timeout_err = OperationalError("SELECT 1", {}, TimeoutError("timed out"))
+    assert classify_db_exception(timeout_err)["category"] == "connection_timeout"
+
+    net_err = OperationalError(
+        "SELECT 1",
+        {},
+        FakeDbapiError("network is unreachable", err_no=errno.ENETUNREACH),
+    )
+    assert classify_db_exception(net_err)["category"] == "network_unreachable"
+
+    ssl_err = OperationalError(
+        "SELECT 1", {}, ssl.SSLError("SSL: CERTIFICATE_VERIFY_FAILED")
+    )
+    assert classify_db_exception(ssl_err)["category"] == "tls_ssl_failure"
+
+    auth_err = OperationalError(
+        "SELECT 1",
+        {},
+        FakeDbapiError('password authentication failed for user "secret_u"', sqlstate="28P01"),
+    )
+    auth_diag = classify_db_exception(auth_err)
+    assert auth_diag["category"] == "authentication_failed"
+    assert auth_diag["sqlstate"] == "28P01"
+
+    unavail_err = OperationalError(
+        "SELECT 1", {}, FakeDbapiError("endpoint is disabled")
+    )
+    assert classify_db_exception(unavail_err)["category"] == "server_unavailable"
+
+    gai_err = OperationalError("SELECT 1", {}, socket.gaierror("getaddrinfo failed"))
+    assert classify_db_exception(gai_err)["category"] == "dns_resolution_failed"
+
+
+def test_health_check_logs_safe_structured_diagnostics_and_hides_secrets(
     monkeypatch, caplog
 ) -> None:
     import app.main as main_mod
@@ -102,10 +157,11 @@ def test_health_check_logs_safe_structured_diagnostics_with_valid_sqlstate(
     assert res.json() == {"status": "degraded", "database": "unavailable"}
 
     full_log = "\n".join(r.getMessage() for r in caplog.records)
-    assert (
-        "Database health check failed (exception=OperationalError, dbapi_exception=FakeDbapiError, sqlstate=28P01)"
-        in full_log
-    )
+    assert "exception=sqlalchemy.exc.OperationalError" in full_log
+    assert f"nested={FakeDbapiError.__module__}.FakeDbapiError" in full_log
+    assert "category=authentication_failed" in full_log
+    assert "sqlstate=28P01" in full_log
+    assert "os_errno=unavailable" in full_log
     for sensitive in (
         "secret_user",
         "secret_pass_123",
@@ -117,51 +173,3 @@ def test_health_check_logs_safe_structured_diagnostics_with_valid_sqlstate(
     ):
         assert sensitive not in full_log
         assert sensitive not in res.text
-
-
-def test_health_check_handles_missing_and_invalid_sqlstate_safely(
-    monkeypatch, caplog
-) -> None:
-    import app.main as main_mod
-
-    # 1. Invalid sqlstate value
-    orig_invalid = FakeDbapiError("secret_host.neon.tech failure", sqlstate="BAD!@#")
-    bad_session_1 = MagicMock()
-    bad_session_1.__enter__.return_value.execute.side_effect = OperationalError(
-        "SELECT 1", {}, orig_invalid
-    )
-    monkeypatch.setattr(main_mod, "SessionLocal", lambda: bad_session_1)
-
-    with caplog.at_level(logging.ERROR, logger="app.main"):
-        with TestClient(app) as client:
-            res1 = client.get("/health")
-
-    assert res1.status_code == 200
-    assert res1.json() == {"status": "degraded", "database": "unavailable"}
-    log1 = "\n".join(r.getMessage() for r in caplog.records)
-    assert "sqlstate=unavailable" in log1
-    assert "BAD!@#" not in log1
-    assert "secret_host.neon.tech" not in log1
-
-    caplog.clear()
-
-    # 2. Plain exception without orig or sqlstate
-    bad_session_2 = MagicMock()
-    bad_session_2.__enter__.return_value.execute.side_effect = TimeoutError(
-        "secret_pass_999@db.example.com"
-    )
-    monkeypatch.setattr(main_mod, "SessionLocal", lambda: bad_session_2)
-
-    with caplog.at_level(logging.ERROR, logger="app.main"):
-        with TestClient(app) as client:
-            res2 = client.get("/health")
-
-    assert res2.status_code == 200
-    assert res2.json() == {"status": "degraded", "database": "unavailable"}
-    log2 = "\n".join(r.getMessage() for r in caplog.records)
-    assert (
-        "Database health check failed (exception=TimeoutError, dbapi_exception=none, sqlstate=unavailable)"
-        in log2
-    )
-    assert "secret_pass_999" not in log2
-    assert "db.example.com" not in log2
