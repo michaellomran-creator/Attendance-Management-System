@@ -1,4 +1,5 @@
 from typing import List, Optional
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,6 +17,18 @@ class Settings(BaseSettings):
     DATABASE_URL: str = (
         "postgresql+psycopg://attendance_user:attendance_dev_pass@localhost:5432/attendance_platform"
     )
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def normalize_database_url(cls, value: str) -> str:
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        if cleaned.startswith("postgres://"):
+            return "postgresql+psycopg://" + cleaned[len("postgres://") :]
+        if cleaned.startswith("postgresql://"):
+            return "postgresql+psycopg://" + cleaned[len("postgresql://") :]
+        return cleaned
 
     SECRET_KEY: str = "dev-only-insecure-key-change-in-production-64-chars-minimum-123456"
     ALGORITHM: str = "HS256"

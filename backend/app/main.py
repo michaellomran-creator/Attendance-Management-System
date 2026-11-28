@@ -1,3 +1,6 @@
+import logging
+from typing import Any
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -6,6 +9,16 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.exceptions import register_exception_handlers
+
+logger = logging.getLogger(__name__)
+
+
+def _extract_safe_sqlstate(orig: Any) -> str:
+    raw = getattr(orig, "sqlstate", None)
+    if isinstance(raw, str) and len(raw) == 5 and raw.isalnum():
+        return raw
+    return "unavailable"
+
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -43,7 +56,14 @@ def health_check() -> dict:
     try:
         with SessionLocal() as db:
             db.execute(text("SELECT 1"))
-    except Exception:
+    except Exception as exc:
+        orig = getattr(exc, "orig", None)
+        logger.error(
+            "Database health check failed (exception=%s, dbapi_exception=%s, sqlstate=%s)",
+            type(exc).__name__,
+            type(orig).__name__ if orig is not None else "none",
+            _extract_safe_sqlstate(orig),
+        )
         db_status = "unavailable"
     return {"status": "ok" if db_status == "ok" else "degraded", "database": db_status}
 
